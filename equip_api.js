@@ -1,0 +1,185 @@
+const express = require('express');
+const mysql = require('mysql2');
+const cors = require('cors');
+const app = express();
+const multer = require('multer');
+const path = require('path');
+const bcrypt = require('bcrypt');
+const port = 4000;
+
+//Database(MySql) configuration
+const db = mysql.createConnection(
+  {
+    host: 'localhost',
+    user: 'root',
+    password: '1234',
+    database: 'equipment'
+  }
+)
+db.connect()
+
+//Middleware (Body parser)
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(cors({
+  origin: 'http://localhost:3000',
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  credentials: true
+}));
+//Hello World API
+app.get('/', function(req, res){
+  res.send('Hello World!');
+});
+
+//Register
+app.post('/api/register', function(req, res){
+  const { username, password, firstname, lastname } = req.body;
+  const sql = 'INSERT INTO user (username, password, firstname, lastname ) VALUES (?, ?, ?, ?)';
+  
+  db.query(sql, [username, password, firstname, lastname], 
+    function(err, result) {
+    if (err) throw err;
+    res.send({ message: 'ลงทะเบียนสำเร็จ','status':true });
+}
+  );
+}); 
+
+//Login
+app.post('/api/login', function(req, res){
+  const { username, password } = req.body;
+  let sql = 'SELECT * FROM user WHERE ';
+  sql += "username ='" + username+ "'";
+  sql += " AND password ='" + password + "'";
+  console.log(sql);
+  //' OR '1=1
+  db.query(sql, [username, password], function(err, result) {
+    if (err) throw err;
+    if (result.length > 0) {
+      let user = result[0]
+      user['message'] = 'เข้าสู่ระบบสำเร็จ';
+      user['status'] = true;
+      res.send(user);
+    }
+    else {
+      res.send({ 'message': 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง', 'status': false });
+    }
+  })
+}
+);
+   
+// Forgot Password
+app.post('/api/forgot-password', (req, res) => {
+  const { username, newPassword } = req.body;
+
+  if (!username || !newPassword) {
+    return res.status(400).json({ status: false, message: "กรุณาระบุ username และ newPassword" });
+  }
+
+  const sql = "UPDATE user SET password = ? WHERE username = ?";
+  db.query(sql, [newPassword, username], (err, result) => {
+    if (err) {
+      console.error("❌ SQL Error:", err);
+      return res.status(500).json({ status: false, message: "เกิดข้อผิดพลาดทางเซิร์ฟเวอร์" });
+    }
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ status: false, message: "ไม่พบผู้ใช้นี้" });
+    }
+
+    res.json({ status: true, message: "เปลี่ยนรหัสผ่านสำเร็จ" });
+  });
+});
+
+
+
+// ดึงข้อมูลโปรไฟล์ผู้ใช้ตาม userID (base64)
+app.get('/api/profile/:id', (req, res) => {
+  const userID = req.params.id; // ✅ แก้ตรงนี้
+  const sql = "SELECT  firstName, lastName, email, mobilePhone, division, imageFile FROM user WHERE userID = ?";
+  db.query(sql, [userID], (err, result) => {
+    if (err) {
+      console.error("❌ SQL Error: " + err);
+      return res.status(500).json({ message: "เกิดข้อผิดพลาด", status: false });
+    }
+    if (result.length === 0) {
+      return res.status(404).json({ message: "ไม่พบข้อมูลผู้ใช้งาน", status: false });
+    }
+    res.json(result[0]);
+  });
+});
+
+
+// อัปเดตข้อมูลโปรไฟล์และอัปโหลดรูป (base64)
+app.post('/api/profile/update', (req, res) => {
+  const { userID, firstName, lastName, email, mobilePhone, division, imageFile } = req.body;
+
+  if (!userID) {
+    return res.status(400).json({ status: false, message: "ไม่พบ userID" });
+  }
+
+  const sql = "UPDATE user SET firstName = ?, lastName = ?, email = ?, mobilePhone = ?, division = ?, imageFile = ? WHERE userID = ?";
+  db.query(sql, [firstName, lastName, email, mobilePhone, division, imageFile, userID], (err, result) => {
+    if (err) {
+      console.error("❌ SQL Error: " + err);
+      return res.status(500).json({ message: "เกิดข้อผิดพลาด", status: false });
+    }
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: "ไม่พบข้อมูลผู้ใช้งาน", status: false });
+    }
+
+    res.json({ message: "ข้อมูลถูกอัปเดตเรียบร้อยแล้ว", status: true });
+  });
+});
+
+// API สำหรับเบิกอุปกรณ์
+app.post('/api/borrow', (req, res) => {
+  const { userID, equipmentID, quantity } = req.body;
+
+  if (!userID || !equipmentID || !quantity) {
+    return res.status(400).json({ status: false, message: "กรุณาระบุข้อมูลให้ครบถ้วน (userID, equipmentID, quantity)" });
+  }
+
+  // ตรวจสอบว่าอุปกรณ์มีเพียงพอหรือไม่
+  const checkStockSql = "SELECT stock FROM equipment WHERE equipmentID = ?";
+  db.query(checkStockSql, [equipmentID], (err, result) => {
+    if (err) {
+      console.error("❌ SQL Error:", err);
+      return res.status(500).json({ status: false, message: "เกิดข้อผิดพลาดทางเซิร์ฟเวอร์" });
+    }
+
+    if (result.length === 0) {
+      return res.status(404).json({ status: false, message: "ไม่พบอุปกรณ์ที่ระบุ" });
+    }
+
+    const availableStock = result[0].stock;
+    if (availableStock < quantity) {
+      return res.status(400).json({ status: false, message: "จำนวนอุปกรณ์ไม่เพียงพอ" });
+    }
+
+    // อัปเดตสต็อกอุปกรณ์
+    const updateStockSql = "UPDATE equipment SET stock = stock - ? WHERE equipmentID = ?";
+    db.query(updateStockSql, [quantity, equipmentID], (err, updateResult) => {
+      if (err) {
+        console.error("❌ SQL Error:", err);
+        return res.status(500).json({ status: false, message: "เกิดข้อผิดพลาดทางเซิร์ฟเวอร์" });
+      }
+
+      // บันทึกข้อมูลการเบิกอุปกรณ์
+      const borrowSql = "INSERT INTO borrow (userID, equipmentID, quantity, borrowDate) VALUES (?, ?, ?, NOW())";
+      db.query(borrowSql, [userID, equipmentID, quantity], (err, borrowResult) => {
+        if (err) {
+          console.error("❌ SQL Error:", err);
+          return res.status(500).json({ status: false, message: "เกิดข้อผิดพลาดทางเซิร์ฟเวอร์" });
+        }
+
+        res.json({ status: true, message: "เบิกอุปกรณ์สำเร็จ" });
+      });
+    });
+  });
+});
+
+//Web sever
+app.listen(port, function(){
+  console.log(`Server is running on http://localhost:${port}`);
+});
