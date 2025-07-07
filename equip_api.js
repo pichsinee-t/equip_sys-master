@@ -4,7 +4,7 @@ const cors = require('cors');
 const app = express();
 const multer = require('multer');
 const path = require('path');
-const bcrypt = require('bcrypt');
+const upload = multer({ dest: "uploads/" }); // โฟลเดอร์เก็บไฟล์ชั่วคราว
 const port = 4000;
 
 //Database(MySql) configuration
@@ -132,52 +132,107 @@ app.post('/api/profile/update', (req, res) => {
   });
 });
 
-// API สำหรับเบิกอุปกรณ์
-app.post('/api/borrow', (req, res) => {
-  const { userID, equipmentID, quantity } = req.body;
+// ดึงข้อมูลอุปกรณ์สำนักงานทั้งหมดจากตาราง equipments
+app.get('/api/equipment', (req, res) => {
+  const sql = "SELECT * FROM equipments";
+  db.query(sql, (err, result) => {
+    if (err) {
+      console.error("❌ SQL Error: " + err);
+      return res.status(500).json({ message: "เกิดข้อผิดพลาด", status: false });
+    }
+    res.json(result);
+  });
+});
 
-  if (!userID || !equipmentID || !quantity) {
-    return res.status(400).json({ status: false, message: "กรุณาระบุข้อมูลให้ครบถ้วน (userID, equipmentID, quantity)" });
+// ยืนยันการขอเบิก-จ่าย (พร้อมรับไฟล์รูป, ตรวจสต็อก, บันทึก DB)
+app.post('/api/bring-confirm', upload.single('idCardImg'), (req, res) => {
+  const selectedDate = req.body.selectedDate;
+  const requestAmountsJSON = req.body.requestAmounts;
+  const idCardImg = req.file;
+
+  
+  
+  if (!selectedDate || !idCardImg || !requestAmountsJSON) {
+    return res.json({ status: false, message: 'ข้อมูลไม่ครบ' });
   }
 
-  // ตรวจสอบว่าอุปกรณ์มีเพียงพอหรือไม่
-  const checkStockSql = "SELECT stock FROM equipment WHERE equipmentID = ?";
-  db.query(checkStockSql, [equipmentID], (err, result) => {
-    if (err) {
-      console.error("❌ SQL Error:", err);
-      return res.status(500).json({ status: false, message: "เกิดข้อผิดพลาดทางเซิร์ฟเวอร์" });
-    }
+  let userID = req.headers['x-user-id']; // ✅ คุณเลือกว่าจะส่ง userID จาก header หรือ body
+  if (!userID) {
+    return res.json({ status: false, message: 'ไม่ได้ส่ง userID' });
+  }
 
-    if (result.length === 0) {
-      return res.status(404).json({ status: false, message: "ไม่พบอุปกรณ์ที่ระบุ" });
-    }
+  let requestAmounts;
+  try {
+    requestAmounts = JSON.parse(requestAmountsJSON);
+  } catch (err) {
+    return res.json({ status: false, message: 'requestAmounts ไม่เป็น JSON' });
+  }
 
-    const availableStock = result[0].stock;
-    if (availableStock < quantity) {
-      return res.status(400).json({ status: false, message: "จำนวนอุปกรณ์ไม่เพียงพอ" });
-    }
-
-    // อัปเดตสต็อกอุปกรณ์
-    const updateStockSql = "UPDATE equipment SET stock = stock - ? WHERE equipmentID = ?";
-    db.query(updateStockSql, [quantity, equipmentID], (err, updateResult) => {
-      if (err) {
-        console.error("❌ SQL Error:", err);
-        return res.status(500).json({ status: false, message: "เกิดข้อผิดพลาดทางเซิร์ฟเวอร์" });
-      }
-
-      // บันทึกข้อมูลการเบิกอุปกรณ์
-      const borrowSql = "INSERT INTO borrow (userID, equipmentID, quantity, borrowDate) VALUES (?, ?, ?, NOW())";
-      db.query(borrowSql, [userID, equipmentID, quantity], (err, borrowResult) => {
-        if (err) {
-          console.error("❌ SQL Error:", err);
-          return res.status(500).json({ status: false, message: "เกิดข้อผิดพลาดทางเซิร์ฟเวอร์" });
-        }
-
-        res.json({ status: true, message: "เบิกอุปกรณ์สำเร็จ" });
+  // ตรวจสอบจำนวนที่ขอเบิก
+  const checkStockPromises = Object.entries(requestAmounts).map(([equipmentID, amount]) => {
+    return new Promise((resolve, reject) => {
+      db.query('SELECT amount FROM equipments WHERE equipmentID = ?', [equipmentID], (err, rows) => {
+        if (err) return reject(err);
+        if (rows.length === 0) return reject(new Error(`ไม่พบอุปกรณ์ ID ${equipmentID}`));
+        if (rows[0].amount < amount) return reject(new Error(`จำนวนคงเหลือของอุปกรณ์ ID ${equipmentID} ไม่พอ`));
+        resolve();
       });
     });
   });
+
+  Promise.all(checkStockPromises)
+    .then(() => {
+      // หัก stock
+      const updateStockPromises = Object.entries(requestAmounts).map(([equipmentID, amount]) => {
+        return new Promise((resolve, reject) => {
+          db.query('UPDATE equipments SET amount = amount - ? WHERE equipmentID = ?', [amount, equipmentID], (err) => {
+            if (err) return reject(err);
+            resolve();
+          });
+        });
+      });
+
+      return Promise.all(updateStockPromises);
+    })
+    .then(() => {
+      // บันทึก bring
+      const bringDate = new Date();
+      const imagePath = `/uploads/${idCardImg.filename}`;
+      const insertBringSql = `
+        INSERT INTO bring (userID, bringDate, receiveDate, imageFile)
+        VALUES (?, ?, ?, ?)
+      `;
+      return new Promise((resolve, reject) => {
+        db.query(insertBringSql, [userID, bringDate, selectedDate, imagePath], (err, result) => {
+          if (err) return reject(err);
+          const bringID = result.insertId;
+          resolve(bringID);
+        });
+      });
+    })
+    .then((bringID) => {
+      // บันทึก bring_detail
+      const detailPromises = Object.entries(requestAmounts).map(([equipmentID, amount]) => {
+        return new Promise((resolve, reject) => {
+          const sql = 'INSERT INTO bringdetail (bringID, equipmentID, amount) VALUES (?, ?, ?)';
+          db.query(sql, [bringID, equipmentID, amount], (err) => {
+            if (err) return reject(err);
+            resolve();
+          });
+        });
+      });
+
+      return Promise.all(detailPromises);
+    })
+    .then(() => {
+      res.json({ status: true, message: 'บันทึกการขอเบิกสำเร็จ' });
+    })
+    .catch((err) => {
+      console.error(err);
+      res.json({ status: false, message: err.message });
+    });
 });
+
 
 //Web sever
 app.listen(port, function(){
