@@ -54,7 +54,11 @@ function Bring() {
   const loadEquipment = () => {
     fetch("http://localhost:4000/api/equipment")
       .then((res) => res.json())
-      .then((data) => setEquipment(data))
+      .then((data) => {
+        // กรองเฉพาะอุปกรณ์ที่ typeID === 1
+        const filtered = data.filter((item) => item.typeID === 1);
+        setEquipment(filtered);
+      })
       .catch(() => setEquipment([]));
   };
 
@@ -151,6 +155,9 @@ function Bring() {
           setIdCardImg(null);
           setIdCardPreview(null);
           loadEquipment(); // โหลดข้อมูลใหม่
+          setTimeout(() => {
+            navigate("/history");
+          }, 1200); // รอให้แสดง snackbar สักครู่ก่อนเปลี่ยนหน้า
         } else {
           setAlertMsg(`เกิดข้อผิดพลาด: ${data.message}`);
           setAlertSeverity("error");

@@ -5,6 +5,7 @@ import Homepage from './components/Homepage';
 import Profile from './components/Profile';
 import Bring from './components/Bring';
 import Borrow from './components/Borrow';
+import History from './components/History';
 import React from 'react';
 import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
 
@@ -19,6 +20,8 @@ function App() {
         <Route path="/profile" element={<Profile />} />
         <Route path="/bring" element={<Bring />} />
         <Route path="/borrow" element={<Borrow />} />
+        <Route path="/history" element={<History />} />
+        
       </Routes>
     </Router>
   );

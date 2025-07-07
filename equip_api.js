@@ -233,6 +233,107 @@ app.post('/api/bring-confirm', upload.single('idCardImg'), (req, res) => {
     });
 });
 
+// ยืนยันการขอยืม-คืน (พร้อมรับไฟล์รูป, ตรวจสต็อก, บันทึก DB)
+app.post('/api/borrow-confirm', upload.single('idCardImg'), (req, res) => {
+  const selectedDate = req.body.selectedDate;
+  const returnDate = req.body.returnDate;
+  const requestAmountsJSON = req.body.requestAmounts;
+  const idCardImg = req.file;
+
+  console.log('selectedDate:', selectedDate);
+  console.log('returnDate:', returnDate);
+
+  if (!selectedDate || !returnDate || !idCardImg || !requestAmountsJSON) {
+    return res.json({ status: false, message: 'ข้อมูลไม่ครบ' });
+  }
+
+  const userID = req.headers['x-user-id'];
+  if (!userID) {
+    return res.json({ status: false, message: 'ไม่ได้ส่ง userID' });
+  }
+
+  let requestAmounts;
+  try {
+    requestAmounts = JSON.parse(requestAmountsJSON);
+  } catch (err) {
+    return res.json({ status: false, message: 'requestAmounts ไม่เป็น JSON' });
+  }
+
+  // ตรวจสอบจำนวนที่ขอยืม
+  const checkStockPromises = Object.entries(requestAmounts).map(([equipmentID, amount]) => {
+    return new Promise((resolve, reject) => {
+      db.query('SELECT amount FROM equipments WHERE equipmentID = ?', [equipmentID], (err, rows) => {
+        if (err) return reject(err);
+        if (rows.length === 0) return reject(new Error(`ไม่พบอุปกรณ์ ID ${equipmentID}`));
+        if (rows[0].amount < amount) return reject(new Error(`จำนวนคงเหลือของอุปกรณ์ ID ${equipmentID} ไม่พอ`));
+        resolve();
+      });
+    });
+  });
+
+  Promise.all(checkStockPromises)
+    .then(() => {
+      // หักสต็อก
+      const updateStockPromises = Object.entries(requestAmounts).map(([equipmentID, amount]) => {
+        return new Promise((resolve, reject) => {
+          db.query(
+            'UPDATE equipments SET amount = amount - ? WHERE equipmentID = ?',
+            [amount, equipmentID],
+            (err) => {
+              if (err) return reject(err);
+              resolve();
+            }
+          );
+        });
+      });
+      return Promise.all(updateStockPromises);
+    })
+    .then(() => {
+      // บันทึกตาราง borrow (master)
+      const borrowDate = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+      const imagePath = `/uploads/${idCardImg.filename}`;
+      const insertBorrowSql = `
+        INSERT INTO borrow (userID, borrowDate, receiveDate, returnDate, imageFile)
+        VALUES (?, ?, ?, ?, ?)
+      `;
+      return new Promise((resolve, reject) => {
+        db.query(
+          insertBorrowSql,
+          [userID, borrowDate, selectedDate, returnDate, imagePath],
+          (err, result) => {
+            if (err) return reject(err);
+            const borrowID = result.insertId;
+            resolve(borrowID);
+          }
+        );
+      });
+    })
+    .then((borrowID) => {
+      // บันทึก borrowdetail (detail)
+      const detailPromises = Object.entries(requestAmounts).map(([equipmentID, amount]) => {
+        return new Promise((resolve, reject) => {
+          const sql = `
+            INSERT INTO borrowdetail (borrowID, equipmentID, returnDate, amount)
+            VALUES (?, ?, ?, ?)
+          `;
+          db.query(sql, [borrowID, equipmentID, returnDate, amount], (err) => {
+            if (err) return reject(err);
+            resolve();
+          });
+        });
+      });
+
+      return Promise.all(detailPromises);
+    })
+    .then(() => {
+      res.json({ status: true, message: 'บันทึกการขอยืมสำเร็จ' });
+    })
+    .catch((err) => {
+      console.error('❌ Error in borrow-confirm:', err);
+      res.json({ status: false, message: err.message });
+    });
+});
+
 
 //Web sever
 app.listen(port, function(){
