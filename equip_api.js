@@ -334,6 +334,121 @@ app.post('/api/borrow-confirm', upload.single('idCardImg'), (req, res) => {
     });
 });
 
+// API ดึงประวัติการเบิก-จ่าย (bring) ของ user
+app.get('/api/history-bring', (req, res) => {
+  const userID = req.query.userID;
+  if (!userID) {
+    return res.json([]);
+  }
+
+  // join bring, bringdetail, equipments
+  const sql = `
+    SELECT 
+      b.bringDate AS date,
+      b.receiveDate,
+      bd.equipmentID,
+      e.equipmentName,
+      bd.amount,
+      b.statusID,
+      b.imageFile
+    FROM bring b
+    JOIN bringdetail bd ON b.bringID = bd.bringID
+    JOIN equipments e ON bd.equipmentID = e.equipmentID
+    WHERE b.userID = ?
+    ORDER BY b.bringDate DESC
+  `;
+
+  db.query(sql, [userID], (err, rows) => {
+    if (err) {
+      console.error(err);
+      return res.json([]);
+    }
+
+    // แปลงข้อมูลให้อยู่ในรูปแบบที่ frontend ใช้
+    const result = rows.map(row => {
+      let statusText = "-";
+      switch (row.statusID) {
+        case 0: statusText = "กำลังตรวจสอบ"; break;
+        case 1: statusText = "ยืนยันการเบิก"; break;
+        case 2: statusText = "รับของเรียบร้อย"; break;
+        default: statusText = "ไม่ทราบสถานะ";
+      }
+
+      return {
+        type: "เบิก-จ่าย",
+        date: row.date,
+        receiveDate: row.receiveDate,
+        equipmentID: row.equipmentID,
+        equipmentName: row.equipmentName,
+        amount: row.amount,
+        status: statusText,
+        imageFile: row.imageFile || null,
+        returnDate: null // ไม่มีวันรับคืนสำหรับเบิก-จ่าย
+      };
+    });
+
+    res.json(result);
+  });
+});
+
+// API ดึงประวัติการยืม-คืน (borrow)
+app.get('/api/history-borrow', (req, res) => {
+  const userID = req.query.userID;
+  if (!userID) return res.json([]);
+
+  const sql = `
+    SELECT 
+      br.borrowDate AS date,
+      br.receiveDate,
+      br.returnDate,
+      bd.equipmentID,
+      e.equipmentName,
+      bd.amount,
+      br.statusID,
+      br.imageFile
+    FROM borrow br
+    JOIN borrowdetail bd ON br.borrowID = bd.borrowID
+    JOIN equipments e ON bd.equipmentID = e.equipmentID
+    WHERE br.userID = ?
+    ORDER BY br.borrowDate DESC
+  `;
+
+  db.query(sql, [userID], (err, rows) => {
+    if (err) {
+      console.error(err);
+      return res.json([]);
+    }
+
+    const result = rows.map(row => {
+      let statusText = "-";
+      switch (row.statusID) {
+        case 0: statusText = "กำลังตรวจสอบ"; break;
+        case 1: statusText = "ยืนยันการยืม"; break;
+        case 2: statusText = "รับของเรียบร้อย"; break;
+        case 3: statusText = "ตรวจสอบอุปกรณ์"; break;
+        case 4: statusText = "คืนอุปกรณ์เรียบร้อย"; break;
+        case 5: statusText = "อุปกรณ์เสียหาย"; break;
+        default: statusText = "ไม่ทราบสถานะ";
+      }
+
+      return {
+        type: "ยืม-คืน",
+        date: row.date,
+        receiveDate: row.receiveDate,
+        returnDate: row.returnDate,
+        equipmentID: row.equipmentID,
+        equipmentName: row.equipmentName,
+        amount: row.amount,
+        status: statusText,
+        imageFile: row.imageFile || null
+      };
+    });
+
+    res.json(result);
+  });
+});
+
+
 
 //Web sever
 app.listen(port, function(){

@@ -53,11 +53,25 @@ function History() {
   const lastname = localStorage.getItem("lastname");
   const userID = localStorage.getItem("userID");
 
-  // โหลดประวัติการเบิก-ยืม
+  // ✅ ฟังก์ชันแปลง imageFile ให้เป็น src ที่แสดงได้
+  const getImageSrc = (imageFile) => {
+    if (!imageFile) return null;
+
+    if (imageFile.startsWith("data:")) return imageFile;
+    if (imageFile.startsWith("http")) return imageFile;
+
+    // fallback เป็น base64 ดิบ
+    return `data:image/jpeg;base64,${imageFile}`;
+  };
+
   const loadHistory = () => {
-    fetch(`http://localhost:4000/api/history?userID=${userID}`)
-      .then((res) => res.json())
-      .then((data) => setHistory(data))
+    Promise.all([
+      fetch(`http://localhost:4000/api/history-bring?userID=${userID}`).then((res) => res.json()),
+      fetch(`http://localhost:4000/api/history-borrow?userID=${userID}`).then((res) => res.json()),
+    ])
+      .then(([bringData, borrowData]) => {
+        setHistory([...bringData, ...borrowData]);
+      })
       .catch(() => {
         setAlertMsg("เกิดข้อผิดพลาดในการโหลดข้อมูล");
         setAlertSeverity("error");
@@ -66,8 +80,8 @@ function History() {
   };
 
   useEffect(() => {
-    loadHistory();
-  }, []);
+    if (userID) loadHistory();
+  }, [userID]);
 
   useEffect(() => {
     if (isLoggedIn) {
@@ -101,14 +115,12 @@ function History() {
     setOpen(false);
   };
 
-  // ฟิลเตอร์ข้อมูลตามประเภท
   const filteredHistory = history.filter((item) => {
     if (filterType === "bring") return item.type === "เบิก-จ่าย";
     if (filterType === "borrow") return item.type === "ยืม-คืน";
     return true;
   });
 
-  // เปิด Dialog รายละเอียด
   const handleDetailOpen = (item) => {
     setSelectedDetail(item);
     setDetailOpen(true);
@@ -157,14 +169,8 @@ function History() {
               anchorEl={anchorEl}
               open={Boolean(anchorEl)}
               onClose={handleMenuClose}
-              anchorOrigin={{
-                vertical: "bottom",
-                horizontal: "right",
-              }}
-              transformOrigin={{
-                vertical: "top",
-                horizontal: "right",
-              }}
+              anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+              transformOrigin={{ vertical: "top", horizontal: "right" }}
             >
               <MenuItem onClick={handleProfile}>จัดการข้อมูลผู้ใช้</MenuItem>
               <MenuItem onClick={handleLogout}>ออกจากระบบ</MenuItem>
@@ -272,7 +278,7 @@ function History() {
                     </Typography>
                     <Box
                       component="img"
-                      src={selectedDetail.imageFile}
+                      src={getImageSrc(selectedDetail.imageFile)}
                       alt="idcard"
                       sx={{ width: 200, mt: 1, borderRadius: 1, border: "1px solid #ccc" }}
                     />
