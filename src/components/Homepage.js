@@ -30,10 +30,11 @@ function HomePage() {
   const [profilePic, setProfilePic] = useState(null);
   const [first, setFirst] = useState(localStorage.getItem("firstname") || "");
   const [last, setLast] = useState(localStorage.getItem("lastname") || "");
+  const [roleID, setRoleID] = useState(parseInt(localStorage.getItem("roleID") || "0"));
 
   const navigate = useNavigate();
 
-  // ออกจากระบบอัตโนมัติเมื่อปิด/refresh
+  // ออกจากระบบอัตโนมัติเมื่อปิด/refresh หน้าเว็บ
   useEffect(() => {
     const handleBeforeUnload = () => {
       localStorage.removeItem("isLoggedIn");
@@ -41,6 +42,7 @@ function HomePage() {
       localStorage.removeItem("lastname");
       localStorage.removeItem("userID");
       localStorage.removeItem("profilePic");
+      localStorage.removeItem("roleID");
     };
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => {
@@ -59,7 +61,6 @@ function HomePage() {
           .then((res) => res.json())
           .then((data) => {
             if (data.status) {
-              // อัปเดตชื่อ
               if (data.firstName) {
                 localStorage.setItem("firstname", data.firstName);
                 setFirst(data.firstName);
@@ -68,10 +69,13 @@ function HomePage() {
                 localStorage.setItem("lastname", data.lastName);
                 setLast(data.lastName);
               }
-              // อัปเดตรูป
               if (data.imageFile) {
                 localStorage.setItem("profilePic", data.imageFile);
                 setProfilePic(data.imageFile);
+              }
+              if (data.roleID) {
+                localStorage.setItem("roleID", data.roleID);
+                setRoleID(parseInt(data.roleID));
               }
             }
           })
@@ -114,6 +118,7 @@ function HomePage() {
     localStorage.removeItem("lastname");
     localStorage.removeItem("userID");
     localStorage.removeItem("profilePic");
+    localStorage.removeItem("roleID");
     handleMenuClose();
     navigate("/login");
   };
@@ -179,6 +184,7 @@ function HomePage() {
             </Menu>
           </Toolbar>
         </AppBar>
+
         <Box
           sx={{
             minHeight: "calc(100vh - 64px)",
@@ -210,9 +216,40 @@ function HomePage() {
               size="large"
               onClick={() => handleProtectedClick("/borrow")}
             >
-              ยืม-คืนอุปกรณ์สำนักงาน
+              ยืมโสตทัศนูปกรณ์
             </Button>
             <Button
+              variant="contained"
+              color="warning"
+              size="large"
+              onClick={() => handleProtectedClick("/return")}
+            >
+              คืนโสตทัศนูปกรณ์
+            </Button>
+
+            {/* ✅ ปุ่มพิเศษ: แสดงเฉพาะ roleID = 2 หรือ 4 */}
+            {(roleID === 2 || roleID === 4) && (
+              <Button
+                variant="contained"
+                color="secondary"
+                size="large"
+                onClick={() => handleProtectedClick("/approvebring")}
+              >
+                อนุมัติการเบิก-จ่าย
+              </Button>
+            )}
+          {/* ✅ ปุ่มพิเศษ: แสดงเฉพาะ roleID = 3 หรือ 4 */}
+            {(roleID === 3 || roleID === 4) && (
+              <Button
+                variant="contained"
+                color="secondary"
+                size="large"
+                onClick={() => handleProtectedClick("/approveborrow")}
+              >
+                อนุมัติการยืม-คืน
+              </Button>
+            )}
+          <Button
               variant="outlined"
               color="info"
               size="large"
@@ -222,6 +259,7 @@ function HomePage() {
             </Button>
           </Stack>
         </Box>
+
         <Snackbar
           open={open}
           autoHideDuration={1200}

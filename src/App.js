@@ -6,6 +6,8 @@ import Profile from './components/Profile';
 import Bring from './components/Bring';
 import Borrow from './components/Borrow';
 import History from './components/History';
+import Return from './components/Return';
+import EditBring from './components/EditBring';
 import React from 'react';
 import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
 
@@ -21,7 +23,8 @@ function App() {
         <Route path="/bring" element={<Bring />} />
         <Route path="/borrow" element={<Borrow />} />
         <Route path="/history" element={<History />} />
-        
+        <Route path="/return" element={<Return />} />
+        <Route path="/edit-bring" element={<EditBring />} />
       </Routes>
     </Router>
   );

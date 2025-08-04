@@ -23,6 +23,7 @@ import { createTheme, ThemeProvider } from "@mui/material/styles";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import AccountCircleIcon from "@mui/icons-material/AccountCircle";
 import DeleteIcon from "@mui/icons-material/Delete";
+import { MenuItem } from "@mui/material";
 
 const theme = createTheme({
   typography: {
@@ -245,11 +246,22 @@ const Profile = () => {
                     />
                     <TextField
                       fullWidth
+                      select
                       label="กองงาน"
                       name="division"
                       value={formData.division}
                       onChange={handleInputChange}
-                    />
+                    >
+                    <MenuItem value="">-- เลือกกองงาน --</MenuItem>
+                    <MenuItem value="กกล.">กกล.</MenuItem>
+                    <MenuItem value="กมศ.">กมศ.</MenuItem>
+                    <MenuItem value="กจห.">กจห.</MenuItem>
+                    <MenuItem value="กนผ.">กนผ.</MenuItem>
+                    <MenuItem value="กศษ.">กศษ.</MenuItem>
+                    <MenuItem value="กกง.">กกง.</MenuItem>
+                    <MenuItem value="กงป.">กงป.</MenuItem>
+                    <MenuItem value="กทด.">กทด.</MenuItem>
+                    </TextField>
                     <Box display="flex" justifyContent="center" gap={2}>
                       <Button type="submit" variant="contained" color="primary">
                         บันทึก

@@ -34,15 +34,16 @@ app.get('/', function(req, res){
 //Register
 app.post('/api/register', function(req, res){
   const { username, password, firstname, lastname } = req.body;
-  const sql = 'INSERT INTO user (username, password, firstname, lastname ) VALUES (?, ?, ?, ?)';
+  const sql = 'INSERT INTO user (username, password, firstname, lastname, roleID) VALUES (?, ?, ?, ?, ?)';
   
-  db.query(sql, [username, password, firstname, lastname], 
+  db.query(sql, [username, password, firstname, lastname, 1], 
     function(err, result) {
-    if (err) throw err;
-    res.send({ message: 'ลงทะเบียนสำเร็จ','status':true });
-}
+      if (err) throw err;
+      res.send({ message: 'ลงทะเบียนสำเร็จ', status: true });
+    }
   );
-}); 
+});
+ 
 
 //Login
 app.post('/api/login', function(req, res){
@@ -196,7 +197,7 @@ app.post('/api/bring-confirm', upload.single('idCardImg'), (req, res) => {
     })
     .then(() => {
       // บันทึก bring
-      const bringDate = new Date();
+      const bringDate = new Date().toISOString().slice(0, 19).replace('T', ' ');
       const imagePath = `/uploads/${idCardImg.filename}`;
       const insertBringSql = `
         INSERT INTO bring (userID, bringDate, receiveDate, imageFile)
@@ -334,18 +335,19 @@ app.post('/api/borrow-confirm', upload.single('idCardImg'), (req, res) => {
     });
 });
 
-// API ดึงประวัติการเบิก-จ่าย (bring) ของ user
+// API ดึงประวัติการเบิก-จ่าย (bring)
 app.get('/api/history-bring', (req, res) => {
   const userID = req.query.userID;
   if (!userID) {
     return res.json([]);
   }
 
-  // join bring, bringdetail, equipments
+  // JOIN bring, bringdetail, equipments
   const sql = `
     SELECT 
-      b.bringDate AS date,
-      b.receiveDate,
+      b.bringID,
+      DATE_FORMAT(b.bringDate, '%Y-%m-%d') AS date,
+      DATE_FORMAT(b.receiveDate, '%Y-%m-%d') AS receiveDate,
       bd.equipmentID,
       e.equipmentName,
       bd.amount,
@@ -355,98 +357,298 @@ app.get('/api/history-bring', (req, res) => {
     JOIN bringdetail bd ON b.bringID = bd.bringID
     JOIN equipments e ON bd.equipmentID = e.equipmentID
     WHERE b.userID = ?
-    ORDER BY b.bringDate DESC
+    ORDER BY b.bringDate DESC, b.bringID DESC
   `;
 
   db.query(sql, [userID], (err, rows) => {
     if (err) {
       console.error(err);
-      return res.json([]);
+      return res.status(500).json({ error: "Database error" });
     }
 
-    // แปลงข้อมูลให้อยู่ในรูปแบบที่ frontend ใช้
-    const result = rows.map(row => {
-      let statusText = "-";
-      switch (row.statusID) {
-        case 0: statusText = "กำลังตรวจสอบ"; break;
-        case 1: statusText = "ยืนยันการเบิก"; break;
-        case 2: statusText = "รับของเรียบร้อย"; break;
-        default: statusText = "ไม่ทราบสถานะ";
+    // Group by bringID
+    const bringMap = new Map();
+
+    rows.forEach(row => {
+      if (!bringMap.has(row.bringID)) {
+        bringMap.set(row.bringID, {
+          bringID: row.bringID,
+          date: row.date,
+          receiveDate: row.receiveDate,
+          returnDate: null,          // ไม่มีวันคืนสำหรับเบิก-จ่าย
+          status: getStatusText(row.statusID),
+          statusID: row.statusID, // ✅ เพิ่มบรรทัดนี้
+          type: "เบิก-จ่าย",
+          imageFile: row.imageFile || null,
+          details: []
+        });
       }
 
-      return {
-        type: "เบิก-จ่าย",
-        date: row.date,
-        receiveDate: row.receiveDate,
+      bringMap.get(row.bringID).details.push({
         equipmentID: row.equipmentID,
         equipmentName: row.equipmentName,
         amount: row.amount,
-        status: statusText,
-        imageFile: row.imageFile || null,
-        returnDate: null // ไม่มีวันรับคืนสำหรับเบิก-จ่าย
-      };
+        receiveDate: row.receiveDate
+      });
     });
+
+    // Convert to array and add count
+    const result = Array.from(bringMap.values()).map(bring => ({
+      ...bring,
+      count: bring.details.length
+    }));
 
     res.json(result);
   });
 });
+
+function getStatusText(statusID) {
+  switch (statusID) {
+    case 0: return "รอตรวจสอบ";
+    case 1: return "อนุมัติ";
+    case 2: return "ไม่อนุมติ";
+    case 5: return "ขอยกเลิก";
+    case 6: return "ยกเลิก";
+    default: return "ไม่ทราบสถานะ";
+  }
+}
+
+
 
 // API ดึงประวัติการยืม-คืน (borrow)
 app.get('/api/history-borrow', (req, res) => {
   const userID = req.query.userID;
-  if (!userID) return res.json([]);
+  if (!userID) {
+    return res.json([]);
+  }
 
+  // JOIN borrow, borrowdetail, equipments
   const sql = `
     SELECT 
-      br.borrowDate AS date,
-      br.receiveDate,
-      br.returnDate,
+      bo.borrowID,
+      DATE_FORMAT(bo.borrowDate, '%Y-%m-%d') AS date,
+      DATE_FORMAT(bo.receiveDate, '%Y-%m-%d') AS receiveDate,
+      DATE_FORMAT(bo.returnDate, '%Y-%m-%d') AS returnDate,
       bd.equipmentID,
       e.equipmentName,
       bd.amount,
-      br.statusID,
-      br.imageFile
-    FROM borrow br
-    JOIN borrowdetail bd ON br.borrowID = bd.borrowID
+      bo.statusID,
+      bo.imageFile
+    FROM borrow bo
+    JOIN borrowdetail bd ON bo.borrowID = bd.borrowID
     JOIN equipments e ON bd.equipmentID = e.equipmentID
-    WHERE br.userID = ?
-    ORDER BY br.borrowDate DESC
+    WHERE bo.userID = ?
+    ORDER BY bo.borrowDate DESC, bo.borrowID DESC
   `;
 
   db.query(sql, [userID], (err, rows) => {
     if (err) {
       console.error(err);
-      return res.json([]);
+      return res.status(500).json({ error: "Database error" });
     }
 
-    const result = rows.map(row => {
-      let statusText = "-";
-      switch (row.statusID) {
-        case 0: statusText = "กำลังตรวจสอบ"; break;
-        case 1: statusText = "ยืนยันการยืม"; break;
-        case 2: statusText = "รับของเรียบร้อย"; break;
-        case 3: statusText = "ตรวจสอบอุปกรณ์"; break;
-        case 4: statusText = "คืนอุปกรณ์เรียบร้อย"; break;
-        case 5: statusText = "อุปกรณ์เสียหาย"; break;
-        default: statusText = "ไม่ทราบสถานะ";
+    // Group by borrowID
+    const borrowMap = new Map();
+
+    rows.forEach(row => {
+      if (!borrowMap.has(row.borrowID)) {
+        borrowMap.set(row.borrowID, {
+          borrowID: row.borrowID,
+          date: row.date,
+          receiveDate: row.receiveDate,
+          returnDate: row.returnDate,
+          statusID: row.statusID, // ✅ เพิ่มบรรทัดนี้
+          status: getBorrowStatusText(row.statusID),
+          type: "ยืม-คืน",
+          imageFile: row.imageFile || null,
+          details: []
+        });
       }
 
-      return {
-        type: "ยืม-คืน",
-        date: row.date,
-        receiveDate: row.receiveDate,
-        returnDate: row.returnDate,
+      borrowMap.get(row.borrowID).details.push({
         equipmentID: row.equipmentID,
         equipmentName: row.equipmentName,
         amount: row.amount,
-        status: statusText,
-        imageFile: row.imageFile || null
-      };
+        receiveDate: row.receiveDate,
+        returnDate: row.returnDate
+      });
     });
+
+    // Convert to array and add count
+    const result = Array.from(borrowMap.values()).map(borrow => ({
+      ...borrow,
+      count: borrow.details.length
+    }));
 
     res.json(result);
   });
 });
+
+// ฟังก์ชันแปลงสถานะยืม-คืนเป็นภาษาไทย
+function getBorrowStatusText(statusID) {
+  switch (statusID) {
+    case 0: return "รอตรวจสอบ";
+    case 1: return "อนุมัติ";
+    case 2: return "ไม่อนุมัติ";
+    case 3: return "ส่งคืนสำเร็จ";
+    case 4: return "ส่งคืนไม่สำเร็จ";
+    case 5: return "ขอยกเลิก";
+    case 6: return "ยกเลิก";
+    default: return "ไม่ทราบสถานะ";
+  }
+}
+
+// API ยกเลิกการเบิก-จ่าย
+app.post('/api/cancel-bring', (req, res) => {
+  const { bringID, userID } = req.body;
+
+  if (!bringID || !userID) {
+    return res.send({ status: false, message: 'Missing parameters' });
+  }
+
+  // อัปเดตสถานะเป็น "รอตรวจสอบ" (statusID = 5)
+  const sql = 'UPDATE bring SET statusID = ? WHERE bringID = ? AND userID = ?';
+
+  db.query(sql, [5, bringID, userID], (err, result) => {
+    if (err) {
+      console.error('DB Error:', err);
+      return res.send({ status: false, message: 'DB Error' });
+    }
+
+    if (result.affectedRows === 5) {
+      return res.send({ status: false, message: 'ไม่พบรายการหรือไม่มีสิทธิ์ยกเลิก' });
+    }
+
+    return res.send({ status: true });
+  });
+});
+
+
+// API ยกเลิกการยืม-คืน
+app.post('/api/cancel-borrow', (req, res) => {
+  const { borrowID, userID } = req.body;
+
+  if (!borrowID || !userID) {
+    return res.send({ status: false, message: 'Missing parameters' });
+  }
+
+  // อัปเดตสถานะเป็น "ขอยกเลิก" (statusID = 5)
+  const sql = 'UPDATE borrow SET statusID = ? WHERE borrowID = ? AND userID = ?';
+
+  db.query(sql, [5, borrowID, userID], (err, result) => {
+    if (err) {
+      console.error('DB Error:', err);
+      return res.send({ status: false, message: 'DB Error' });
+    }
+
+    if (result.affectedRows === 0) {
+      return res.send({ status: false, message: 'ไม่พบรายการหรือไม่มีสิทธิ์ยกเลิก' });
+    }
+
+    return res.send({ status: true });
+  });
+});
+
+
+
+//API อัพเดทสถานะคืน
+app.post("/api/update-all-status", (req, res) => {
+  const { borrowID, statusID } = req.body;
+
+  const sql = `
+    UPDATE borrow
+    SET statusID = ?
+    WHERE borrowID = ?
+  `;
+
+  db.query(sql, [statusID, borrowID], (err, result) => {
+    if (err) return res.status(500).json({ status: false, message: "DB Error" });
+    res.json({ status: true });
+  });
+});
+
+//api แก้ไขชื่อเเละจำนวนอุปกรณ์ที่เบิก-จ่าย(จนท.กจห.)
+app.put('/api/edit-equipment/:equipmentID', (req, res) => {
+  const roleID = Number(req.headers['x-user-role']);
+  if (roleID !== 2) {
+    return res.status(403).json({ status: false, message: "ไม่มีสิทธิ์ใช้งาน" });
+  }
+
+  const equipmentID = req.params.equipmentID;
+  const { equipmentName, amount } = req.body;
+
+  if (!equipmentName || typeof amount !== 'number' || amount < 0) {
+    return res.status(400).json({ status: false, message: "ข้อมูลไม่ถูกต้อง" });
+  }
+
+  const sql = `
+    UPDATE equipments
+    SET equipmentName = ?, amount = ?
+    WHERE equipmentID = ?
+  `;
+
+  db.query(sql, [equipmentName, amount, equipmentID], (err, result) => {
+    if (err) {
+      console.error(err);
+      return res.status(500).json({ status: false, message: "เกิดข้อผิดพลาดในฐานข้อมูล" });
+    }
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ status: false, message: "ไม่พบอุปกรณ์ที่ต้องการแก้ไข" });
+    }
+
+    res.json({ status: true, message: "แก้ไขอุปกรณ์สำเร็จ" });
+  });
+});
+
+//api เพิ่มอุปกรณ์ใหม่(จนท.กจห.)
+app.post('/api/add-equipment', (req, res) => {
+  const roleID = Number(req.headers['x-user-role']);
+  if (roleID !== 2) {
+    return res.status(403).json({ status: false, message: "ไม่มีสิทธิ์ใช้งาน" });
+  }
+
+  const { equipmentName, amount } = req.body;
+
+  if (!equipmentName || typeof amount !== 'number' || amount < 0) {
+    return res.status(400).json({ status: false, message: "ข้อมูลไม่ถูกต้อง" });
+  }
+
+  const typeID = 1; // ✅ บังคับเป็น 1 เสมอ
+
+  const sql = `
+    INSERT INTO equipments (equipmentName, amount, typeID)
+    VALUES (?, ?, ?)
+  `;
+
+  db.query(sql, [equipmentName, amount, typeID], (err, result) => {
+    if (err) {
+      console.error(err);
+      return res.status(500).json({ status: false, message: "เกิดข้อผิดพลาดในฐานข้อมูล" });
+    }
+
+    res.json({ status: true, message: "เพิ่มอุปกรณ์ใหม่สำเร็จ", equipmentID: result.insertId });
+  });
+});
+
+// API ลบอุปกรณ์สำนักงาน(จนท.กจห.)
+app.delete('/api/delete-equipment/:id', (req, res) => {
+  const roleID = Number(req.headers['x-user-role']);
+  if (roleID !== 2) {
+    return res.status(403).json({ status: false, message: "ไม่มีสิทธิ์ใช้งาน" });
+  }
+
+  const { id } = req.params;
+  const sql = "DELETE FROM equipments WHERE equipmentID = ?";
+  db.query(sql, [id], (err, result) => {
+    if (err) {
+      console.error(err);
+      return res.status(500).json({ status: false, message: "เกิดข้อผิดพลาดในการลบข้อมูล" });
+    }
+    res.json({ status: true, message: "ลบอุปกรณ์สำเร็จ" });
+  });
+});
+
 
 
 
